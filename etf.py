@@ -1,101 +1,80 @@
-import urllib2
-import threading
 import os
-import sys
-import ConfigParser
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.header import Header
-from email.utils import formataddr
-import requests
-import smtplib
-import urllib
 import re
+import threading
+from urllib.request import urlopen
+
+from decouple import config
+from pushbullet import Device as _device
+from pushbullet import PushBullet as _pb
+
+SEC_ETF_URL = 'https://www.sec.gov/rules/sro/batsbzx.htm'
+SEC_FTP_URL = 'https://www.sec.gov/rules/sro/batsbzx/2017/?C=M;O=A'
+
 
 def main():
-    if len(sys.argv)!=2:
-        print 'please include the arguments: fromEmailPassword.'
-        sys.exit()
-    
-    fromEmailPW=sys.argv[1]
+    if not config('PUSHBULLET_API_KEY'):
+        print("You haven't configured PUSH!")
 
-    #init and import the configuration file
-    Config = ConfigParser.ConfigParser()
-    Config.read('Config.ini')
+    check_etf(SEC_ETF_URL)
+    check_ftp(SEC_FTP_URL)
 
-    checkETF('https://www.sec.gov/rules/sro/batsbzx.htm', Config, fromEmailPW)
-    checkFTP('https://www.sec.gov/rules/sro/batsbzx/2017/?C=M;O=A', Config, fromEmailPW)
 
-def sendEmail(emailtext,fromEmail,fromEmailPW,toEmail):
-    msg = MIMEMultipart('alternative')
-    msg['To'] = toEmail
-    msg['Subject'] = 'Bitcoin etf resuls!'
-    msg['From'] = formataddr((str(Header('Python BTC SEC ETF Bot :)', 'utf-8')), fromEmail))
-    part1 = MIMEText(emailtext, 'plain')
-    msg.attach(part1)
-    server = smtplib.SMTP('smtp.gmail.com', 587)
-    server.ehlo()
-    server.starttls()
-    server.login(fromEmail, fromEmailPW)
-    server.sendmail(fromEmail, toEmail, msg.as_string())
-    server.close()
-    print 'successfully sent the email'
+def send_push(text):
+    api_key = config('PUSHBULLET_API_KEY')
+    device_id = config('PUSHBULLET_DEVICE_ID', None)
+    device_info = {'iden': device_id}
+    pb = _pb(api_key=api_key)
+    api = _device(account=pb, device_info=device_info)
+    title = 'Bitcoin ETF resuls!'
+    body = text
+    try:
+        api.push_note(title, body)
+        print('Successfully sent the Push')
+    except:
+        print('There was a problem sending your Push')
 
-def sendSMS(accountSid, authToken, text, fromSMS, toSMS):
 
-    s = requests.Session()
-    s.auth = (accountSid, authToken)
-    body = { 'To' : toSMS, 'From' : fromSMS, 'Body':text}
-    url = 'https://api.twilio.com/2010-04-01/Accounts/' + accountSid + '/Messages.json'
+def notify(url):
+    text = 'Bitcoin has been detected on ' + url
+    print(text)
+    send_push(text)
 
-    r = s.post(url, body)
-    if r.status_code != 201:
-        print 'There was a problem sending your SMS'
-        print r.content
-    else :
-        print 'Successfully sent the SMS'
 
-def notify(config, url, fromEmailPW):
-    text= 'Bitcoin has been detected on ' + url
-    print text
+def check_etf(url):
+    threading.Timer(15, check_etf, [url]).start()
+    data = urlopen(url).read(
+        20000)  # number of chars that should catch the announcement
 
-    if config.get('Preferences', 'Email') == 'true':
-        sendEmail(text, config.get('Emails','From'), fromEmailPW, config.get('Emails','To'))
-    if config.get('Preferences', 'SMS') == 'true':
-        sendSMS(config.get('Twilio', 'AccountSid'), config.get('Twilio', 'AuthToken'),
-            text, config.get('SMS','From'), config.get('SMS','To'))
+    # Use lower case by default
+    each_word = data.lower().split()
 
-def checkETF(url, config, fromEmailPW):
-
-    threading.Timer(15, checkETF,[url, config, fromEmailPW]).start()
-    data = urllib2.urlopen(url).read(20000) #number of chars that should catch the announcement
-    
-    #Use lower case by default
-    eachWord = data.lower().split()
-
-    if 'bitcoin' in eachWord:
-        notify(config, url, fromEmailPW)
-                
+    if 'bitcoin' in each_word:
+        notify(url)
         os._exit(0)
     else:
-        print 'No mention of bitcoin has been found yet on ' + url
+        print('No mention of bitcoin has been found yet on ' + url)
 
-def checkFTP(url, config, fromEmailPW):
 
-    threading.Timer(15, checkFTP,[url, config, fromEmailPW]).start()
-    data = urllib2.urlopen(url).read(20000) #number of chars that should catch the announcement
-    
-    #Use lower case by default
+def check_ftp(url):
+    threading.Timer(15, check_ftp, [url]).start()
+    # number of chars that should catch the announcement
+    data = urlopen(url).read(20000).decode('utf-8')
+
+    # Use lower case by default
     words = data.lower().split()
 
-    #Check for any new documetns during the ten days after March 10th 2017
+    # Check for any new documents during the ten days after March 10th 2017
     matches = [string for string in words if re.match('1.-mar-2017', string)]
     if matches:
-        notify(config, url, fromEmailPW)
-                
+        notify(url)
         os._exit(0)
     else:
-        print 'No mention of bitcoin has been found yet on ' + url
+        print('No mention of bitcoin has been found yet on ' + url)
 
-main()
 
+def test_notify():
+    notify('Testing!')
+
+
+if __name__ == '__main__':
+    main()
